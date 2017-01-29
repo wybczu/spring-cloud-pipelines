@@ -1,0 +1,68 @@
+pipeline {
+
+    agent any
+
+    environment {
+        GIT_COMMITTER_NAME = "jenkins"
+        GIT_COMMITTER_EMAIL = "jenkins@jenkins.io"
+    }
+
+    stages {
+        stage("Build and Upload") {
+            steps {
+                sh 'echo Deploying and testing'
+                sh 'env'
+            }
+        }
+
+        stage("Deploy to test") {
+            steps {
+                sh 'echo Deploying to test'
+            }
+        }
+
+        stage("Tests on test") {
+            steps {
+                sh 'echo Running tests on test'
+            }
+        }
+
+        stage("Deploy to test latest prod version") {
+            steps {
+                sh 'echo Deploying to test latest prod version'
+            }
+        }
+
+        stage("Tests on test latest prod version") {
+            steps {
+                sh 'echo Running tests on test with latest prod version'
+            }
+        }
+
+
+        stage("Deploy to stage") {
+            steps {
+                sh 'echo Deploying to stage'
+            }
+        }
+
+        stage("End to end tests on stage") {
+            steps {
+                sh 'echo Running end to end tests on stage'
+            }
+        }
+
+        stage("Deploy to prod") {
+            steps {
+                sh 'echo Deploying to prod green instance'
+            }
+        }
+
+        stage("Complete switch over") {
+            steps {
+                sh 'echo Disabling blue instance'
+            }
+        }
+    }
+}
+
