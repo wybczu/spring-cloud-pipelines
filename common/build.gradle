@@ -29,19 +29,19 @@ task installShellcheckIfMissing(type: Exec) {
 
 task shellcheck {
     doLast {
+        boolean shellcheckInstalled = isShellcheckInstalled()
+        String pathToShellcheck = "shellcheck"
+        if (!shellcheckInstalled) {
+            boolean fileCopied = new File("/usr/bin/shellcheck").exists()
+            if (fileCopied) {
+                pathToShellcheck = "/usr/bin/shellcheck"
+            } else {
+                pathToShellcheck = new File(project(":common").buildDir, "shellcheck-latest/shellcheck").path
+            }
+        }
         sourceSets*.resources.srcDirs*.each { srcDir ->
             fileTree(relativePath(srcDir)).include('**/*.sh').each { File script ->
                 exec {
-                    boolean shellcheckInstalled = isShellcheckInstalled()
-                    String pathToShellcheck = "shellcheck"
-                    if (!shellcheckInstalled) {
-                        boolean fileCopied = new File("/usr/bin/shellcheck").exists()
-                        if (fileCopied) {
-                            pathToShellcheck = "/usr/bin/shellcheck"
-                        } else {
-                            pathToShellcheck = new File(project(":common").buildDir, "shellcheck-latest/shellcheck").path
-                        }
-                    }
                     commandLine pathToShellcheck, script
                 }
             }
@@ -49,5 +49,11 @@ task shellcheck {
     }
 }
 
+task bats(type: Exec) {
+    workingDir 'src/test/bats'
+    commandLine 'bats', '.'
+}
+
 shellcheck.dependsOn("installShellcheckIfMissing")
 build.dependsOn("shellcheck")
+build.dependsOn("bats")
