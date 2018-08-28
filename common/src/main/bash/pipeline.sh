@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash +x
 
 set -o errexit
 set -o errtrace
@@ -12,6 +12,7 @@ set -o pipefail
 #  - projectType/pipeline-projectType.sh
 #  - pipeline-${paasType}.sh (e.g. pipeline-cf.sh)
 #  - custom/${scriptName}.sh (e.g. custom/build_and_upload.sh)
+#  - custom/pipeline-${paasType}.sh (e.g. custom/pipeline-cf.sh)
 #
 # Essentially, the scripts implementing the functions can be divided
 # into 2 types.
@@ -69,14 +70,23 @@ function apiCompatibilityCheck() {
 	if [[ -z "${prodTag}" ]]; then
 		echo "No prod release took place - skipping this step"
 	else
+		export LATEST_PROD_TAG PASSED_LATEST_PROD_TAG
+		LATEST_PROD_TAG="${prodTag}"
+		PASSED_LATEST_PROD_TAG="${prodTag}"
 		PROJECT_NAME=${PROJECT_NAME?PROJECT_NAME must be set!}
 		LATEST_PROD_VERSION=${prodTag#"prod/${PROJECT_NAME}/"}
 		echo "Last prod version equals [${LATEST_PROD_VERSION}]"
 		executeApiCompatibilityCheck "${LATEST_PROD_VERSION}"
+		mkdir -p "${OUTPUT_FOLDER}"
+		{
+			echo "LATEST_PROD_VERSION=${LATEST_PROD_VERSION}";
+			echo "LATEST_PROD_TAG=${prodTag}";
+			echo "PASSED_LATEST_PROD_TAG=${prodTag}";
+		} >> "${OUTPUT_FOLDER}/trigger.properties"
 	fi
 } # }}}
 
-# FUNCTION: apiCompatibilityCheck {{{
+# FUNCTION: executeApiCompatibilityCheck {{{
 # Execute api compatibility check step for the given latest production version $1
 #
 # $1 - retrieved latest production version
@@ -103,6 +113,17 @@ function retrieveAppName() {
 	echo "Echos the name of the application"
 	exit 1
 } # }}}
+
+# FUNCTION: retrieveStubRunnerIds {{{
+# Retrieves the ids for Spring Cloud Contract Stub Runner. If you don't use
+# Stub Runner, overriding this method is not mandatory. The format of the IDS is
+# [groupId:artifactId:version:classifier:port]. E.g. [com.example:foo:1.0.0.RELEASE:stubs:1234]
+function retrieveStubRunnerIds() {
+	echo "Retrieves the ids for Spring Cloud Contract Stub Runner. If you don't use
+	Stub Runner, overriding this method is not mandatory"
+	exit 1
+}
+# }}}
 
 # ---- TEST PHASE ----
 
@@ -303,6 +324,16 @@ function trimRefsTag() {
 function extractVersionFromProdTag() {
 	local tag="${1}"
 	echo "${tag#prod/}"
+} # }}}
+
+# FUNCTION: removeProdTag {{{
+# Removes production tag.
+# Uses [PROJECT_NAME] and [PIPELINE_VERSION]
+function removeProdTag() {
+	local tagName
+	tagName="${1:-prod/${PROJECT_NAME}/${PIPELINE_VERSION}}"
+	echo "Deleting production tag [${tagName}]"
+	"${GIT_BIN}" push --delete origin "${tagName}"
 } # }}}
 
 # FUNCTION: parsePipelineDescriptor {{{
@@ -531,8 +562,12 @@ export CUSTOM_SCRIPT_IDENTIFIER="${CUSTOM_SCRIPT_IDENTIFIER:-custom}"
 echo "Custom script identifier is [${CUSTOM_SCRIPT_IDENTIFIER}]"
 CUSTOM_SCRIPT_DIR="${__ROOT}/${CUSTOM_SCRIPT_IDENTIFIER}"
 mkdir -p "${__ROOT}/${CUSTOM_SCRIPT_IDENTIFIER}"
-CUSTOM_SCRIPT_NAME="$(basename "${BASH_SOURCE[1]}")"
-echo "Path to custom script is [${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME}]"
+# The check for null is used for tests
+[[ -z "${CUSTOM_SCRIPT_NAME}" ]] && CUSTOM_SCRIPT_NAME="$(basename "${BASH_SOURCE[1]}")"
+echo "Path to custom script for current step is [${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME}]"
+# The check for null is used for tests
+[[ -z "${CUSTOM_PAAS_SCRIPT_NAME}" ]] && CUSTOM_PAAS_SCRIPT_NAME="pipeline-${PAAS_TYPE}.sh"
+echo "Path to custom script for PAAS is [${CUSTOM_SCRIPT_DIR}/${CUSTOM_PAAS_SCRIPT_NAME}]"
 
 # ================================================================
 #  [SOURCE] Sourcing a custom script if one is available
@@ -540,6 +575,9 @@ echo "Path to custom script is [${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME}]"
 # shellcheck source=/dev/null
 [[ -f "${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME}" ]] && source "${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME}" ||  \
  echo "No ${CUSTOM_SCRIPT_DIR}/${CUSTOM_SCRIPT_NAME} found"
+# shellcheck source=/dev/null
+[[ -f "${CUSTOM_SCRIPT_DIR}/${CUSTOM_PAAS_SCRIPT_NAME}" ]] && source "${CUSTOM_SCRIPT_DIR}/${CUSTOM_PAAS_SCRIPT_NAME}" ||  \
+ echo "No ${CUSTOM_SCRIPT_DIR}/${CUSTOM_PAAS_SCRIPT_NAME} found"
 
 OUTPUT_FOLDER="$(outputFolder)"
 TEST_REPORTS_FOLDER="$(testResultsAntPattern)"

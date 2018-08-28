@@ -15,6 +15,7 @@ setup() {
 	cp -a "${FIXTURES_DIR}/generic" "${TEMP_DIR}"
 	cp -a "${FIXTURES_DIR}/maven" "${TEMP_DIR}/maven"
 	cp -a "${FIXTURES_DIR}/gradle" "${TEMP_DIR}/gradle"
+	cp -a "${SOURCE_DIR}" "${TEMP_DIR}/sc-pipelines"
 }
 
 teardown() {
@@ -409,4 +410,70 @@ teardown() {
 
 	assert_output --partial "No prod release took place - skipping this step"
 	assert_success
+}
+
+@test "should store versions in a file for apiCompatibilityCheck" {
+	export BUILD_OPTIONS="invalid option"
+	export PASSED_LATEST_PROD_TAG="prod/foo/1.0.0.RELEASE"
+	export PROJECT_NAME=foo
+	cd "${TEMP_DIR}/gradle/build_project"
+	source "${SOURCE_DIR}/pipeline.sh"
+
+	run apiCompatibilityCheck
+
+	refute_output --partial "No prod release took place - skipping this step"
+	assert_success
+	trigger="$( cat "target/trigger.properties" )"
+	assert_equal "$( echo "${trigger}" | grep -w "LATEST_PROD_VERSION=1.0.0.RELEASE")" "LATEST_PROD_VERSION=1.0.0.RELEASE"
+	assert_equal "$( echo "${trigger}" | grep -w "LATEST_PROD_TAG=prod/foo/1.0.0.RELEASE")" "LATEST_PROD_TAG=prod/foo/1.0.0.RELEASE"
+	assert_equal "$( echo "${trigger}" | grep -w "PASSED_LATEST_PROD_TAG=prod/foo/1.0.0.RELEASE")" "PASSED_LATEST_PROD_TAG=prod/foo/1.0.0.RELEASE"
+}
+
+@test "should source a custom script if present" {
+	export PAAS_TYPE=cf
+	cd "${TEMP_DIR}/gradle/build_project"
+	ln -s "${FIXTURES_DIR}/custom/build_and_upload.sh" "${TEMP_DIR}/sc-pipelines/custom/build_and_upload.sh"
+	export CUSTOM_SCRIPT_NAME="build_and_upload.sh"
+	source "${TEMP_DIR}/sc-pipelines/pipeline.sh"
+
+	run build
+
+	assert_output --partial "I am executing a custom build function"
+	assert_success
+}
+
+@test "should source a custom PAAS script if present" {
+	export PAAS_TYPE=cf
+	cd "${TEMP_DIR}/gradle/build_project"
+	ln -s "${FIXTURES_DIR}/custom/pipeline-cf.sh" "${TEMP_DIR}/sc-pipelines/custom/pipeline-cf.sh"
+	source "${TEMP_DIR}/sc-pipelines/pipeline.sh"
+
+	run logInToPaas
+
+	assert_output --partial "I am executing a custom login function"
+	assert_success
+}
+
+function stubbed_git() {
+	echo "git $*"
+}
+
+@test "should delete prod tag" {
+	export GIT_BIN="stubbed_git"
+	source "${SOURCE_DIR}/pipeline.sh"
+	export PIPELINE_VERSION="1.0.0"
+	export PROJECT_NAME="foo"
+
+	run removeProdTag
+	assert_output --partial "git push --delete origin prod/${PROJECT_NAME}/${PIPELINE_VERSION}"
+}
+
+@test "should delete explicit prod tag" {
+	export GIT_BIN="stubbed_git"
+	source "${SOURCE_DIR}/pipeline.sh"
+	export PIPELINE_VERSION="1.0.0"
+	export PROJECT_NAME="foo"
+
+	run removeProdTag "prod/bar/2.0.0"
+	assert_output --partial "git push --delete origin prod/bar/2.0.0"
 }

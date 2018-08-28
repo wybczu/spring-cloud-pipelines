@@ -77,7 +77,7 @@ function downloadAppBinary() {
 	mkdir -p "${OUTPUT_FOLDER}"
 	echo "Current folder is [$(pwd)]; Downloading binary from [${pathToArtifact}] to [${destination}]"
 	local success="false"
-	curl -u "${M2_SETTINGS_REPO_USERNAME}:${M2_SETTINGS_REPO_PASSWORD}" "${pathToArtifact}" -o "${destination}" --fail && success="true"
+	"${CURL_BIN}" -u "${M2_SETTINGS_REPO_USERNAME}:${M2_SETTINGS_REPO_PASSWORD}" "${pathToArtifact}" -o "${destination}" --fail && success="true"
 	local outputDir
 	outputDir="${OUTPUT_FOLDER}/${SOURCE_ARTIFACT_TYPE_NAME}"
 	mkdir -p "${outputDir}"
@@ -108,8 +108,6 @@ function retrieveGroupId() {
 	"${COMPOSER_BIN}" group-id 2>/dev/null | tail -1
 } # }}}
 
-# TODO: Add to list of required functions
-
 # FUNCTION: retrieveAppName {{{
 # PHP implementation of the retrieve application name
 function retrieveAppName() {
@@ -119,6 +117,13 @@ function retrieveAppName() {
 		downloadComposerIfMissing
 		"${COMPOSER_BIN}" app-name 2>/dev/null | tail -1
 	fi
+} # }}}
+
+# FUNCTION: retrieveStubRunnerIds {{{
+# PHP implementation of the retrieve stub runner ids
+function retrieveStubRunnerIds() {
+	downloadComposerIfMissing
+	"${COMPOSER_BIN}" stub-ids 2>/dev/null | tail -1
 } # }}}
 
 # ---- TEST PHASE ----

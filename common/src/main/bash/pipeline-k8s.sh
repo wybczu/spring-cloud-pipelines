@@ -1,6 +1,8 @@
 #!/bin/bash
 
-set -e
+set -o errexit
+set -o errtrace
+set -o pipefail
 
 # synopsis {{{
 # Contains all Kubernetes related deployment functions
@@ -102,11 +104,10 @@ function deployService() {
 	local serviceType
 	serviceType="$(toLowerCase "${2}")"
 	local serviceCoordinates
-	serviceCoordinates="$(if [[ "${3}" == "null" ]]; then
-		echo "";
-	else
-		echo "${3}";
-	fi)"
+	serviceCoordinates="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .coordinates')"
+	if [[ "${serviceCoordinates}" == "null" ]]; then
+		serviceCoordinates=""
+	fi
 	local coordinatesSeparator=":"
 	echo "Will deploy service with type [${serviceType}] name [${serviceName}] and coordinates [${serviceCoordinates}]"
 	case ${serviceType} in
@@ -133,7 +134,7 @@ function deployService() {
 			IFS=${coordinatesSeparator} read -r STUBRUNNER_ARTIFACT_ID STUBRUNNER_VERSION <<<"${serviceCoordinates}"
 			IFS="${previousIfs}"
 			local parsedStubRunnerUseClasspath
-			parsedStubRunnerUseClasspath="$(echo "${PARSED_YAML}" | jq --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "stubrunner") | .useClasspath' | sed 's/^"\(.*\)"$/\1/')"
+			parsedStubRunnerUseClasspath="$(echo "${PARSED_YAML}" | jq -r --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "stubrunner") | .useClasspath')"
 			local stubRunnerUseClasspath
 			stubRunnerUseClasspath=$(if [[ "${parsedStubRunnerUseClasspath}" == "null" ]]; then
 				echo "false";
@@ -150,19 +151,19 @@ function deployService() {
 }
 
 function eurekaName() {
-	echo "${PARSED_YAML}" | jq --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "eureka") | .name' | sed 's/^"\(.*\)"$/\1/' || echo ""
+	echo "${PARSED_YAML}" | jq -r --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "eureka") | .name' || echo ""
 }
 
 function rabbitMqName() {
-	echo "${PARSED_YAML}" | jq --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "rabbitmq") | .name' | sed 's/^"\(.*\)"$/\1/' || echo ""
+	echo "${PARSED_YAML}" | jq -r --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "rabbitmq") | .name' || echo ""
 }
 
 function mySqlName() {
-	echo "${PARSED_YAML}" | jq --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "mysql") | .name' | sed 's/^"\(.*\)"$/\1/' || echo ""
+	echo "${PARSED_YAML}" | jq -r --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "mysql") | .name' || echo ""
 }
 
 function mySqlDatabase() {
-	echo "${PARSED_YAML}" | jq --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "mysql") | .database' | sed 's/^"\(.*\)"$/\1/' || echo ""
+	echo "${PARSED_YAML}" | jq -r --arg x "${LOWERCASE_ENV}" '.[$x].services[] | select(.type == "mysql") | .database' || echo ""
 }
 
 function appSystemProps() {
@@ -320,7 +321,7 @@ function deployAndRestartAppWithName() {
 	local appName="${1}"
 	local jarName="${2}"
 	local env="${LOWERCASE_ENV}"
-	echo "Deploying and restarting app with name [${appName}] and jar name [${jarName}]"
+	echo "Deploying and restarting app with name [${appName}] and binary name [${jarName}]"
 	deployAppWithName "${appName}" "${jarName}" "${env}" 'true'
 	restartApp "${appName}"
 }
@@ -341,6 +342,7 @@ function deployAndRestartAppWithNameForSmokeTests() {
 	local deploymentFile="${outputDirectory}/deployment.yml"
 	local serviceFile="${outputDirectory}/service.yml"
 	local systemProps
+	# TODO: SPRING SPECIFIC
 	systemProps="-Dspring.profiles.active=${profiles} $(appSystemProps)"
 	substituteVariables "dockerOrg" "${DOCKER_REGISTRY_ORGANIZATION}" "${deploymentFile}"
 	substituteVariables "version" "${version}" "${deploymentFile}"

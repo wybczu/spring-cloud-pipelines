@@ -1,13 +1,22 @@
 #!/bin/bash
 
-set -e
+set -o errexit
+set -o errtrace
+set -o pipefail
 
 # synopsis {{{
 # Contains all Cloud Foundry related deployment functions
 # }}}
 
 # FUNCTION: logInToPaas {{{
-# Implementation of the CF log in
+# Implementation of the CF log in. Will work in the following way:
+#
+# * Will use CF if one is present (good for envs that are fully offline)
+# * You can disable the redownload CF with [CF_REDOWNLOAD_CLI] env set to [false]
+# * You can provide the URL from which to fetch the CLI via [CF_CLI_URL]
+#
+# Also [CF_TEST_MODE] is used for tests and all the combinations of
+# [PAAS_..._USERNAME/PASSWORD/ORG/SPACE/API_URL] to log in to PAAS
 function logInToPaas() {
 	local user="PAAS_${ENVIRONMENT}_USERNAME"
 	local cfUsername="${!user}"
@@ -26,12 +35,21 @@ function logInToPaas() {
 	fi
 	local api="PAAS_${ENVIRONMENT}_API_URL"
 	local apiUrl="${!api:-api.run.pivotal.io}"
+	local cfToDownload="${CF_REDOWNLOAD_CLI:-true}"
+	local cfPresent
+	cfPresent="$( "${CF_BIN}" --version && echo "true" || echo "false" )"
 
-	echo "Downloading Cloud Foundry CLI"
-	#TODO: is there a way to get this from PCF rather than the latest release? Like fly... Would ensure parity with foundation version...
-	#TODO: offline mode for when there is no internet connection
-	curl -L "https://cli.run.pivotal.io/stable?release=linux64-binary&source=github" --fail | tar -zx
-	chmod +x cf
+	echo "CF CLI present? [${cfPresent}] and force to redownload was set? [${cfToDownload}]"
+
+	if [[ "${cfToDownload}" != "false" || "${cfPresent}" == "false" ]]; then
+		echo "Downloading Cloud Foundry CLI"
+		curl -L "${CF_CLI_URL}" --fail | tar -zx
+		# used by tests
+		if [[ "${CF_TEST_MODE}" != "true" ]]; then
+			CF_BIN="$(pwd)/cf"
+			chmod +x "${CF_BIN}"
+		fi
+	fi
 
 	echo "Cloud Foundry CLI version"
 	"${CF_BIN}" --version
@@ -46,8 +64,8 @@ function logInToPaas() {
 function testCleanup() {
 	# TODO: Clean up space without relying on plug-ins???
 	#TODO: offline mode for when there is no internet connection
-	cf install-plugin do-all -r "CF-Community" -f
-	cf do-all delete {} -r -f
+	"${CF_BIN}" install-plugin do-all -r "CF-Community" -f
+	"${CF_BIN}" do-all delete {} -r -f
 } # }}}
 
 # FUNCTION: deleteService {{{
@@ -119,18 +137,18 @@ function deployService() {
 	case ${serviceType} in
 		broker)
 			local broker
-			broker="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .broker' | sed 's/^"\(.*\)"$/\1/')"
+			broker="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .broker')"
 			local plan
-			plan="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .plan' | sed 's/^"\(.*\)"$/\1/')"
+			plan="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .plan')"
 			local params
-			params="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .params' | sed 's/^"\(.*\)"$/\1/')"
+			params="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .params')"
 			deployBrokeredService "${serviceName}" "${broker}" "${plan}" "${params}"
 		;;
 		app)
 			local pathToManifest
-			pathToManifest="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .pathToManifest' | sed 's/^"\(.*\)"$/\1/')"
+			pathToManifest="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .pathToManifest')"
 			local serviceCoordinates
-			serviceCoordinates="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .coordinates' | sed 's/^"\(.*\)"$/\1/')"
+			serviceCoordinates="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .coordinates')"
 			local coordinatesSeparator=":"
 			local PREVIOUS_IFS="${IFS}"
 			IFS=${coordinatesSeparator} read -r APP_GROUP_ID APP_ARTIFACT_ID APP_VERSION <<<"${serviceCoordinates}"
@@ -141,26 +159,26 @@ function deployService() {
 		cups)
 			# Usage: cf cups SERVICE_INSTANCE -p CREDENTIALS (or credentials file)
 			local params
-			params="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .params' | sed 's/^"\(.*\)"$/\1/')"
+			params="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .params')"
 			deployCupsService "${serviceName}" "-p" "${params}"
 		;;
 		cupsSyslog)
 			# Usage: cf cups SERVICE_INSTANCE -l SYSLOG_DRAIN_URL
 			local syslogDrainUrl
-			syslogDrainUrl="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .url' | sed 's/^"\(.*\)"$/\1/')"
+			syslogDrainUrl="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .url')"
 			deployCupsService "${serviceName}" "-l" "${syslogDrainUrl}"
 		;;
 		cupsRoute)
 			# Usage: cf cups SERVICE_INSTANCE -r ROUTE_SERVICE_URL
 			local routeServiceurl
-			routeServiceurl="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .url' | sed 's/^"\(.*\)"$/\1/')"
+			routeServiceurl="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .url')"
 			deployCupsService "${serviceName}" "-r" "${routeServiceurl}"
 		;;
 		stubrunner)
 			local pathToManifest
-			pathToManifest="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .pathToManifest' | sed 's/^"\(.*\)"$/\1/')"
+			pathToManifest="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .pathToManifest')"
 			local serviceCoordinates
-			serviceCoordinates="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .coordinates' | sed 's/^"\(.*\)"$/\1/')"
+			serviceCoordinates="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceName}" '.[$x].services[] | select(.name == $y) | .coordinates')"
 			local coordinatesSeparator=":"
 			local PREVIOUS_IFS="${IFS}"
 			IFS="${coordinatesSeparator}" read -r STUBRUNNER_GROUP_ID STUBRUNNER_ARTIFACT_ID STUBRUNNER_VERSION <<<"${serviceCoordinates}"
@@ -199,7 +217,7 @@ function deployAndRestartAppWithName() {
 	if [[ ! -z "${manifestProfiles}" && "${manifestProfiles}" != "null" ]]; then
 		profiles="${profiles},${manifestProfiles}"
 	fi
-	echo "Deploying and restarting app with name [${appName}] and jar name [${binaryName}] and env [${ENVIRONMENT}]"
+	echo "Deploying and restarting app with name [${appName}] and binary name [${binaryName}] and env [${ENVIRONMENT}]"
 	deployAppNoStart "${appName}" "${binaryName}" "${ENVIRONMENT}" "" ""
 	setEnvVar "${lowerCaseAppName}" 'SPRING_PROFILES_ACTIVE' "${profiles}"
 	restartApp "${appName}"
@@ -224,7 +242,7 @@ function parseManifest() {
 # $1 - app name
 function getProfilesFromManifest() {
 	local appName="${1}"
-	echo "${PARSED_APP_MANIFEST_YAML}" |  jq --arg x "${appName}" '.applications[] | select(.name = $x) | .env | .SPRING_PROFILES_ACTIVE' | sed 's/^"\(.*\)"$/\1/'
+	echo "${PARSED_APP_MANIFEST_YAML}" |  jq -r --arg x "${appName}" '.applications[] | select(.name = $x) | .env | .SPRING_PROFILES_ACTIVE'
 } # }}}
 
 # FUNCTION: getHostFromManifest {{{
@@ -234,7 +252,7 @@ function getProfilesFromManifest() {
 function getHostFromManifest() {
 	local appName="${1}"
 	local host
-	echo "${PARSED_APP_MANIFEST_YAML}" |  jq --arg x "${appName}" '.applications[] | select(.name = $x) | .host' | sed 's/^"\(.*\)"$/\1/'
+	echo "${PARSED_APP_MANIFEST_YAML}" |  jq -r --arg x "${appName}" '.applications[] | select(.name = $x) | .host'
 } # }}}
 
 # FUNCTION: getInstancesFromManifest {{{
@@ -243,7 +261,7 @@ function getHostFromManifest() {
 # $1 - app name
 function getInstancesFromManifest() {
 	local appName="${1}"
-	echo "${PARSED_APP_MANIFEST_YAML}" |  jq --arg x "${appName}" '.applications[] | select(.name = $x) | .instances' | sed 's/^"\(.*\)"$/\1/'
+	echo "${PARSED_APP_MANIFEST_YAML}" |  jq -r --arg x "${appName}" '.applications[] | select(.name = $x) | .instances'
 } # }}}
 
 # FUNCTION: getAppHostFromPaas {{{
@@ -306,8 +324,10 @@ function deployAppNoStart() {
 	if [[ ${env} == "TEST" || -z "${instances}" || "${instances}" == "null" ]]; then
 		instances=1
 	fi
-	echo "Deploying app with name [${lowerCaseAppName}], env [${env}] and host [${hostname}] with manifest file [${pathToManifest}]"
-	"${CF_BIN}" push "${lowerCaseAppName}" -f "${pathToManifest}" -p "$( pathToPushToCf "${artifactName}" )" -n "${hostname}" -i "${instances}" --no-start
+	local pathToPush
+	pathToPush="$( pathToPushToCf "${artifactName}" )"
+	echo "Deploying app with name [${lowerCaseAppName}], env [${env}] and host [${hostname}] with manifest file [${pathToManifest}] and path to push [${pathToPush}]. The sources should be downloadable [${DOWNLOADABLE_SOURCES}]"
+	"${CF_BIN}" push "${lowerCaseAppName}" -f "${pathToManifest}" -p "${pathToPush}" -n "${hostname}" -i "${instances}" --no-start
 	setEnvVar "${lowerCaseAppName}" 'APP_BINARY' "${artifactName}.${BINARY_EXTENSION}"
 	if [[ "${artifactType}" == "${SOURCE_ARTIFACT_TYPE_NAME}" && "${DOWNLOADABLE_SOURCES}" == "true" ]]; then
 		popd
@@ -455,7 +475,7 @@ function deployAppAsService() {
 	local binaryName="${1}"
 	local appName="${2}"
 	local pathToManifest="${3}"
-	echo "Deploying app as service. Options - jar name [${binaryName}], app name [${appName}], env [${ENVIRONMENT}], path to manifest [${pathToManifest}]"
+	echo "Deploying app as service. Options - binary name [${binaryName}], app name [${appName}], env [${ENVIRONMENT}], path to manifest [${pathToManifest}]"
 	local suffix=""
 	if [[ "${LOWERCASE_ENV}" == "test" ]]; then
 		suffix="$(retrieveAppName)"
@@ -531,14 +551,9 @@ function deployCupsService() {
 function createServiceWithName() {
 	local name="${1}"
 	echo "Creating service with name [${name}]"
-	# TODO run edit by marcin - DO IT!
-	#APPLICATION_DOMAIN="$("${CF_BIN}" apps | grep "${name}" | tr -s ' ' | cut -d' ' -f 6 | cut -d, -f1)"
 	APPLICATION_DOMAIN="$(getAppHostFromPaas "${name}")"
 	JSON='{"uri":"http://'${APPLICATION_DOMAIN}'"}'
-	# TODO leverage method deployCupsService? Does || echo really help? Add it to deployCupsService?
-	# TODO run edit by marcin
 	deployCupsService "${name}" "-p" "${JSON}"
-	#"${CF_BIN}" cups "${name}" -p "${JSON}" || echo "Service already created. Proceeding with the script"
 } # }}}
 
 # used for tests
@@ -557,7 +572,7 @@ function deployStubRunnerBoot() {
 	local pathToManifest="${3}"
 	local suffix
 	suffix="$(retrieveAppName)"
-	echo "Deploying Stub Runner. Options jar name [${jarName}], app name [${stubRunnerName}], manifest [${pathToManifest}], suffix [${suffix}]"
+	echo "Deploying Stub Runner. Options binary name [${jarName}], app name [${stubRunnerName}], manifest [${pathToManifest}], suffix [${suffix}]"
 	deployAppNoStart "${stubRunnerName}" "${jarName}" "${ENVIRONMENT}" "${pathToManifest}" "${suffix}"
 	local prop
 	prop="$(${RETRIEVE_STUBRUNNER_IDS_FUNCTION})"
@@ -598,7 +613,7 @@ function addMultiplePortsSupport() {
 	local previousIfs="${IFS}"
 	local listOfPorts=""
 	local appGuid
-	appGuid="$( "${CF_BIN}" curl "/v2/apps?q=name:${stubRunnerName}" -X GET | jq '.resources[0].metadata.guid' | sed 's/^"\(.*\)"$/\1/' )"
+	appGuid="$( "${CF_BIN}" curl "/v2/apps?q=name:${stubRunnerName}" -X GET | jq -r '.resources[0].metadata.guid' )"
 	echo "App GUID for ${stubRunnerName} is ${appGuid}"
 	IFS="," read -ra vals <<< "${stubrunnerIds}"
 	for stub in "${vals[@]}"; do
@@ -623,7 +638,7 @@ function addMultiplePortsSupport() {
 		echo "Creating route with hostname [${newHostname}]"
 		"${CF_BIN}" create-route "${testSpace}" "${domain}" --hostname "${newHostname}"
 		local routeGuid
-		routeGuid="$( "${CF_BIN}" curl -X GET "/v2/routes?q=host:${newHostname}" | jq '.resources[0].metadata.guid' | sed 's/^"\(.*\)"$/\1/' )"
+		routeGuid="$( "${CF_BIN}" curl -X GET "/v2/routes?q=host:${newHostname}" | jq -r '.resources[0].metadata.guid' )"
 		echo "GUID of the new route is [${routeGuid}]. Will update the mapping for port [${port}]"
 		"${CF_BIN}" curl "/v2/route_mappings" -X POST -d "{ \"app_guid\": \"${appGuid}\", \"route_guid\": \"${routeGuid}\", \"app_port\": ${port} }"
 		echo "Successfully updated the new route mapping for port [${port}]"
@@ -649,8 +664,13 @@ function bindService() {
 } # }}}
 
 # FUNCTION: prepareForSmokeTests {{{
-# CF implementation of prepare for smoke tests
+# CF implementation of prepare for smoke tests, can log in to PAAS to retrieve info about
+# the app. You can skip that via [CF_SKIP_PREPARE_FOR_TESTS] set to [true]
 function prepareForSmokeTests() {
+	if [[ "${CF_SKIP_PREPARE_FOR_TESTS}" == "true" ]]; then
+		echo "Skipping host retrieval, continuing with tests"
+		return 0
+	fi
 	echo "Retrieving group and artifact id - it can take a while..."
 	local appName
 	appName="$(retrieveAppName)"
@@ -667,7 +687,12 @@ function prepareForSmokeTests() {
 
 # FUNCTION: prepareForE2eTests {{{
 # CF implementation of prepare for e2e tests
+# You can skip that via [CF_SKIP_PREPARE_FOR_TESTS] set to [true]
 function prepareForE2eTests() {
+	if [[ "${CF_SKIP_PREPARE_FOR_TESTS}" == "true" ]]; then
+		echo "Skipping host retrieval, continuing with tests"
+		return 0
+	fi
 	logInToPaas
 
 	export APPLICATION_URL
@@ -840,7 +865,7 @@ function propagatePropertiesForTests() {
 	envNodeExists "${LOWERCASE_ENV}" && nodeExists="true" || nodeExists="false"
 	local stubRunnerName=""
 	if [[ "${nodeExists}" == "true" ]]; then
-		stubRunnerName="$(echo "${PARSED_YAML}" |  jq --arg x "${LOWERCASE_ENV}" --arg y "${serviceType}" '.[$x].services[] | select(.name == $y) | .name' | sed 's/^"\(.*\)"$/\1/')"
+		stubRunnerName="$(echo "${PARSED_YAML}" |  jq -r --arg x "${LOWERCASE_ENV}" --arg y "${serviceType}" '.[$x].services[] | select(.name == $y) | .name')"
 	fi
 	local fileLocation="${OUTPUT_FOLDER}/test.properties"
 	echo "Propagating properties for tests. Project [${projectArtifactId}] stub runner app name [${stubRunnerName}] properties location [${fileLocation}]"
@@ -879,3 +904,5 @@ function waitForServicesToInitialize() {
 
 export CF_BIN
 CF_BIN="${CF_BIN:-cf}"
+export CF_CLI_URL
+CF_CLI_URL="${CF_CLI_URL:-https://cli.run.pivotal.io/stable?release=linux64-binary&source=github}"
